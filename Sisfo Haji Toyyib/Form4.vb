@@ -1,21 +1,36 @@
 ﻿
 Imports System.Data.OleDb
+Imports System.Drawing
 Imports System.Drawing.Printing
+Imports System.Globalization
 
 Public Class Form4
 
     Private nomorTransaksi As String = ""
-    Private totalTagihan As Decimal = 0
+    Private totalTagihan As Decimal = 0D
+    Private uangDiterima As Decimal = 0D
+    Private kembalian As Decimal = 0D
     Private sudahDibayar As Boolean = False
 
     Private WithEvents dokumenCetak As New PrintDocument
 
     '========================================
-    ' CONSTRUCTOR
+    ' CONSTRUCTOR DEFAULT
+    ' DIGUNAKAN OLEH WINDOWS FORMS DESIGNER
     '========================================
-    Public Sub New(Optional noTransaksi As String = "")
+    Public Sub New()
 
         InitializeComponent()
+
+    End Sub
+
+    '========================================
+    ' CONSTRUCTOR DENGAN NOMOR TRANSAKSI
+    ' DIGUNAKAN DARI FORM PEMESANAN
+    '========================================
+    Public Sub New(noTransaksi As String)
+
+        Me.New()
 
         nomorTransaksi = noTransaksi
 
@@ -36,21 +51,65 @@ Public Class Form4
         cmbMetode.Items.Add("QRIS")
         cmbMetode.SelectedIndex = 0
 
-        btnCetakStruk.Enabled = False
-        btnProsesPembayaran.Enabled = True
+        txtUangDiterima.Clear()
 
-        AddHandler txtUangDiterima.TextChanged,
-            AddressOf HitungKembalian
+        lblKembalianValue.Text = FormatRupiah(0)
+        lblTotalTagihan.Text = FormatRupiah(0)
+
+        btnProsesPembayaran.Enabled = True
+        btnCetakStruk.Enabled = False
 
         dgvRincianBayar.AllowUserToAddRows = False
+        dgvRincianBayar.AllowUserToDeleteRows = False
         dgvRincianBayar.ReadOnly = True
+        dgvRincianBayar.MultiSelect = False
+        dgvRincianBayar.SelectionMode =
+            DataGridViewSelectionMode.FullRowSelect
+
+        AddHandler txtUangDiterima.TextChanged,
+            AddressOf txtUangDiterima_TextChanged
 
         MuatTransaksi()
 
     End Sub
 
     '========================================
-    ' CARI PESANAN BELUM DIBAYAR
+    ' EVENT INPUT UANG
+    '========================================
+    Private Sub txtUangDiterima_TextChanged(
+        sender As Object,
+        e As EventArgs
+    )
+
+        HitungKembalian()
+
+    End Sub
+
+    '========================================
+    ' FORMAT ANGKA INPUT
+    '========================================
+    Private Sub HitungKembalian()
+
+        uangDiterima = ParseRupiah(txtUangDiterima.Text)
+
+        If uangDiterima >= totalTagihan AndAlso
+            totalTagihan > 0D Then
+
+            kembalian = uangDiterima - totalTagihan
+
+        Else
+
+            kembalian = 0D
+
+        End If
+
+        lblKembalianValue.Text =
+            FormatRupiah(kembalian)
+
+    End Sub
+
+    '========================================
+    ' MEMUAT TRANSAKSI
     '========================================
     Private Sub MuatTransaksi()
 
@@ -60,40 +119,72 @@ Public Class Form4
 
                 conn.Open()
 
+                'Jika nomor transaksi belum diberikan,
+                'ambil pesanan belum dibayar yang paling baru.
                 If nomorTransaksi = "" Then
 
                     Dim sqlCari As String =
-                        "SELECT TOP 1 No_Transaksi " &
-                        "FROM PESANAN " &
-                        "WHERE No_Transaksi NOT IN " &
-                        "(SELECT No_Transaksi FROM PEMBAYARAN) " &
-                        "ORDER BY Waktu_Pesanan DESC"
+                        "SELECT TOP 1 P.No_Transaksi " &
+                        "FROM PESANAN AS P " &
+                        "LEFT JOIN PEMBAYARAN AS B " &
+                        "ON P.No_Transaksi = B.No_Transaksi " &
+                        "WHERE B.No_Transaksi IS NULL " &
+                        "ORDER BY P.Waktu_Pesanan DESC"
 
                     Using cmd As New OleDbCommand(sqlCari, conn)
 
-                        Dim hasil = cmd.ExecuteScalar()
+                        Dim hasil As Object = cmd.ExecuteScalar()
 
                         If hasil Is Nothing OrElse hasil Is DBNull.Value Then
 
                             MessageBox.Show(
-                                "Tidak ada pesanan yang belum dibayar."
+                                "Tidak ada pesanan yang belum dibayar.",
+                                "Informasi",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information
                             )
 
-                            Me.Close()
+                            btnProsesPembayaran.Enabled = False
                             Return
 
                         End If
 
-                        nomorTransaksi = Convert.ToString(hasil)
+                        nomorTransaksi =
+                            Convert.ToString(hasil)
 
                     End Using
 
                 End If
 
-                'Ambil informasi pesanan
+                '--------------------------------
+                ' CEK APAKAH SUDAH DIBAYAR
+                '--------------------------------
+                Dim sqlCek As String =
+                    "SELECT COUNT(*) FROM PEMBAYARAN " &
+                    "WHERE No_Transaksi = ?"
+
+                Using cmd As New OleDbCommand(sqlCek, conn)
+
+                    cmd.Parameters.AddWithValue(
+                        "@p1", nomorTransaksi
+                    )
+
+                    sudahDibayar =
+                        Convert.ToInt32(cmd.ExecuteScalar()) > 0
+
+                End Using
+
+                '--------------------------------
+                ' INFORMASI UTAMA PESANAN
+                '--------------------------------
                 Dim sqlHeader As String =
                     "SELECT Waktu_Pesanan, Nama_Pelanggan, No_ID_Kasir " &
                     "FROM PESANAN WHERE No_Transaksi = ?"
+
+                Dim waktuPesanan As DateTime
+                Dim idKasir As String = ""
+                Dim pelanggan As String = ""
+                Dim ditemukan As Boolean = False
 
                 Using cmd As New OleDbCommand(sqlHeader, conn)
 
@@ -101,39 +192,56 @@ Public Class Form4
                         "@p1", nomorTransaksi
                     )
 
-                    Using reader = cmd.ExecuteReader()
+                    Using reader As OleDbDataReader =
+                        cmd.ExecuteReader()
 
-                        If Not reader.Read() Then
+                        If reader.Read() Then
 
-                            MessageBox.Show(
-                                "Data pesanan tidak ditemukan."
-                            )
+                            waktuPesanan =
+                                Convert.ToDateTime(
+                                    reader("Waktu_Pesanan")
+                                )
 
-                            Me.Close()
-                            Return
+                            pelanggan =
+                                Convert.ToString(
+                                    reader("Nama_Pelanggan")
+                                )
+
+                            idKasir =
+                                Convert.ToString(
+                                    reader("No_ID_Kasir")
+                                )
+
+                            ditemukan = True
 
                         End If
-
-                        lblInfoVal0.Text = nomorTransaksi
-
-                        lblInfoVal1.Text =
-                            Convert.ToDateTime(
-                                reader("Waktu_Pesanan")
-                            ).ToString("dd/MM/yyyy HH:mm")
-
-                        Dim idKasir As String =
-                            Convert.ToString(reader("No_ID_Kasir"))
-
-                        lblInfoVal2.Text =
-                            AmbilNamaKasir(conn, idKasir)
 
                     End Using
 
                 End Using
 
-                'Ambil detail pesanan
-                dgvRincianBayar.Rows.Clear()
+                If Not ditemukan Then
 
+                    MessageBox.Show(
+                        "Transaksi tidak ditemukan."
+                    )
+
+                    btnProsesPembayaran.Enabled = False
+                    Return
+
+                End If
+
+                lblInfoVal0.Text = nomorTransaksi
+
+                lblInfoVal1.Text =
+                    waktuPesanan.ToString("dd/MM/yyyy HH:mm")
+
+                lblInfoVal2.Text =
+                    AmbilNamaKasir(conn, idKasir)
+
+                '--------------------------------
+                ' DETAIL PESANAN
+                '--------------------------------
                 Dim sqlDetail As String =
                     "SELECT MENU.Nama_Menu, " &
                     "DETAIL_PESANAN.Jumlah, " &
@@ -142,78 +250,114 @@ Public Class Form4
                     "ON MENU.ID_Menu = DETAIL_PESANAN.ID_Menu " &
                     "WHERE DETAIL_PESANAN.No_Transaksi = ?"
 
+                Dim tabelDetail As New DataTable()
+
                 Using cmd As New OleDbCommand(sqlDetail, conn)
 
                     cmd.Parameters.AddWithValue(
                         "@p1", nomorTransaksi
                     )
 
-                    Using reader = cmd.ExecuteReader()
+                    Using adapter As New OleDbDataAdapter(cmd)
 
-                        Dim no As Integer = 1
-                        totalTagihan = 0
-
-                        While reader.Read()
-
-                            Dim nama As String =
-                                Convert.ToString(reader("Nama_Menu"))
-
-                            Dim qty As Integer =
-                                Convert.ToInt32(reader("Jumlah"))
-
-                            Dim harga As Decimal =
-                                Convert.ToDecimal(reader("Harga_Satuan"))
-
-                            Dim subtotal As Decimal = qty * harga
-
-                            totalTagihan += subtotal
-
-                            dgvRincianBayar.Rows.Add(
-                                no,
-                                nama,
-                                qty,
-                                FormatRupiah(harga),
-                                FormatRupiah(subtotal)
-                            )
-
-                            no += 1
-
-                        End While
+                        adapter.Fill(tabelDetail)
 
                     End Using
 
                 End Using
 
+                dgvRincianBayar.Rows.Clear()
+
+                totalTagihan = 0D
+
+                Dim nomor As Integer = 1
+
+                For Each data As DataRow In tabelDetail.Rows
+
+                    Dim namaMenu As String =
+                        Convert.ToString(data("Nama_Menu"))
+
+                    Dim jumlah As Integer =
+                        Convert.ToInt32(data("Jumlah"))
+
+                    Dim harga As Decimal =
+                        Convert.ToDecimal(data("Harga_Satuan"))
+
+                    Dim subtotal As Decimal =
+                        jumlah * harga
+
+                    totalTagihan += subtotal
+
+                    dgvRincianBayar.Rows.Add(
+                        nomor,
+                        namaMenu,
+                        jumlah,
+                        FormatRupiah(harga),
+                        FormatRupiah(subtotal)
+                    )
+
+                    nomor += 1
+
+                Next
+
                 lblTotalTagihan.Text =
                     FormatRupiah(totalTagihan)
 
-                HitungKembalian(Nothing, EventArgs.Empty)
+                txtUangDiterima.Clear()
+
+                If sudahDibayar Then
+
+                    btnProsesPembayaran.Enabled = False
+                    btnCetakStruk.Enabled = True
+
+                    AmbilPembayaranTersimpan(conn)
+
+                Else
+
+                    btnProsesPembayaran.Enabled =
+                        totalTagihan > 0D
+
+                    btnCetakStruk.Enabled = False
+
+                End If
+
+                HitungKembalian()
 
             End Using
 
         Catch ex As Exception
 
             MessageBox.Show(
-                "Gagal memuat transaksi: " & ex.Message
+                "Gagal memuat transaksi: " & ex.Message,
+                "Kesalahan",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error
             )
 
         End Try
 
     End Sub
 
+    '========================================
+    ' MENGAMBIL NAMA KASIR
+    '========================================
     Private Function AmbilNamaKasir(
         conn As OleDbConnection,
         idKasir As String
     ) As String
 
         Dim sql As String =
-            "SELECT Nama_Kasir FROM KASIR WHERE No_ID_Kasir = ?"
+            "SELECT Nama_Kasir FROM KASIR " &
+            "WHERE No_ID_Kasir = ?"
 
         Using cmd As New OleDbCommand(sql, conn)
 
-            cmd.Parameters.AddWithValue("@p1", idKasir)
+            cmd.Parameters.AddWithValue(
+                "@p1", idKasir
+            )
 
-            Dim hasil = cmd.ExecuteScalar()
+            Dim hasil As Object =
+                cmd.ExecuteScalar()
 
             If hasil Is Nothing OrElse hasil Is DBNull.Value Then
                 Return idKasir
@@ -226,26 +370,50 @@ Public Class Form4
     End Function
 
     '========================================
-    ' HITUNG KEMBALIAN
+    ' AMBIL DATA PEMBAYARAN YANG SUDAH ADA
     '========================================
-    Private Sub HitungKembalian(
-        sender As Object,
-        e As EventArgs
+    Private Sub AmbilPembayaranTersimpan(
+        conn As OleDbConnection
     )
 
-        Dim uang As Decimal =
-            ParseRupiah(txtUangDiterima.Text)
+        Dim sql As String =
+            "SELECT Jumlah_Bayar, Uang_Diterima, " &
+            "Kembalian, Metode_Pembayaran " &
+            "FROM PEMBAYARAN WHERE No_Transaksi = ?"
 
-        If uang >= totalTagihan AndAlso totalTagihan > 0 Then
+        Using cmd As New OleDbCommand(sql, conn)
 
-            lblKembalianValue.Text =
-                FormatRupiah(uang - totalTagihan)
+            cmd.Parameters.AddWithValue(
+                "@p1", nomorTransaksi
+            )
 
-        Else
+            Using reader = cmd.ExecuteReader()
 
-            lblKembalianValue.Text = FormatRupiah(0)
+                If reader.Read() Then
 
-        End If
+                    totalTagihan =
+                        Convert.ToDecimal(reader("Jumlah_Bayar"))
+
+                    uangDiterima =
+                        Convert.ToDecimal(reader("Uang_Diterima"))
+
+                    kembalian =
+                        Convert.ToDecimal(reader("Kembalian"))
+
+                    cmbMetode.Text =
+                        Convert.ToString(reader("Metode_Pembayaran"))
+
+                    txtUangDiterima.Text =
+                        uangDiterima.ToString("0")
+
+                    lblKembalianValue.Text =
+                        FormatRupiah(kembalian)
+
+                End If
+
+            End Using
+
+        End Using
 
     End Sub
 
@@ -257,23 +425,43 @@ Public Class Form4
         e As EventArgs
     ) Handles btnProsesPembayaran.Click
 
+        If sudahDibayar Then
+
+            MessageBox.Show(
+                "Transaksi ini sudah dibayar."
+            )
+
+            Return
+
+        End If
+
         If nomorTransaksi = "" Then
-            MessageBox.Show("Nomor transaksi belum tersedia.")
+
+            MessageBox.Show(
+                "Nomor transaksi belum tersedia."
+            )
+
             Return
+
         End If
 
-        If totalTagihan <= 0 Then
-            MessageBox.Show("Total tagihan tidak valid.")
+        If totalTagihan <= 0D Then
+
+            MessageBox.Show(
+                "Total tagihan tidak valid."
+            )
+
             Return
+
         End If
 
-        Dim uangDiterima As Decimal =
+        uangDiterima =
             ParseRupiah(txtUangDiterima.Text)
 
         If uangDiterima < totalTagihan Then
 
             MessageBox.Show(
-                "Uang kurang " &
+                "Uang yang diterima kurang " &
                 FormatRupiah(totalTagihan - uangDiterima),
                 "Pembayaran Kurang",
                 MessageBoxButtons.OK,
@@ -285,13 +473,33 @@ Public Class Form4
 
         End If
 
-        Dim kembalian As Decimal =
+        If cmbMetode.SelectedIndex < 0 Then
+
+            MessageBox.Show(
+                "Pilih metode pembayaran."
+            )
+
+            Return
+
+        End If
+
+        kembalian =
             uangDiterima - totalTagihan
 
-        If cmbMetode.SelectedIndex < 0 Then
-            MessageBox.Show("Pilih metode pembayaran.")
-            Return
-        End If
+        Dim konfirmasi As DialogResult =
+            MessageBox.Show(
+                "Nomor transaksi: " & nomorTransaksi & vbCrLf &
+                "Total tagihan: " & FormatRupiah(totalTagihan) & vbCrLf &
+                "Uang diterima: " & FormatRupiah(uangDiterima) & vbCrLf &
+                "Kembalian: " & FormatRupiah(kembalian) & vbCrLf &
+                "Metode: " & cmbMetode.Text & vbCrLf & vbCrLf &
+                "Simpan pembayaran sekarang?",
+                "Konfirmasi Pembayaran",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question
+            )
+
+        If konfirmasi <> DialogResult.Yes Then Return
 
         Try
 
@@ -299,63 +507,84 @@ Public Class Form4
 
                 conn.Open()
 
-                'Cegah pembayaran ganda
-                Dim sqlCek As String =
-                    "SELECT COUNT(*) FROM PEMBAYARAN " &
-                    "WHERE No_Transaksi = ?"
+                Using trans As OleDbTransaction =
+                    conn.BeginTransaction()
 
-                Using cmd As New OleDbCommand(sqlCek, conn)
+                    Try
 
-                    cmd.Parameters.AddWithValue(
-                        "@p1", nomorTransaksi
-                    )
+                        'Periksa ulang pembayaran dalam transaksi.
+                        Dim sqlCek As String =
+                            "SELECT COUNT(*) FROM PEMBAYARAN " &
+                            "WHERE No_Transaksi = ?"
 
-                    If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then
-
-                        MessageBox.Show(
-                            "Pesanan ini sudah dibayar."
+                        Using cmd As New OleDbCommand(
+                            sqlCek, conn, trans
                         )
 
-                        Return
+                            cmd.Parameters.AddWithValue(
+                                "@p1", nomorTransaksi
+                            )
 
-                    End If
+                            If Convert.ToInt32(
+                                cmd.ExecuteScalar()
+                            ) > 0 Then
 
-                End Using
+                                Throw New Exception(
+                                    "Pesanan sudah memiliki pembayaran."
+                                )
 
-                Dim sql As String =
-                    "INSERT INTO PEMBAYARAN " &
-                    "(No_Transaksi, Tanggal_Pembayaran, " &
-                    "Jumlah_Bayar, Uang_Diterima, Kembalian, " &
-                    "Metode_Pembayaran) " &
-                    "VALUES (?, ?, ?, ?, ?, ?)"
+                            End If
 
-                Using cmd As New OleDbCommand(sql, conn)
+                        End Using
 
-                    cmd.Parameters.AddWithValue(
-                        "@p1", nomorTransaksi
-                    )
+                        'Simpan pembayaran.
+                        Dim sqlSimpan As String =
+                            "INSERT INTO PEMBAYARAN " &
+                            "(No_Transaksi, Tanggal_Pembayaran, " &
+                            "Jumlah_Bayar, Uang_Diterima, Kembalian, " &
+                            "Metode_Pembayaran) " &
+                            "VALUES (?, ?, ?, ?, ?, ?)"
 
-                    cmd.Parameters.AddWithValue(
-                        "@p2", DateTime.Now
-                    )
+                        Using cmd As New OleDbCommand(
+                            sqlSimpan, conn, trans
+                        )
 
-                    cmd.Parameters.AddWithValue(
-                        "@p3", totalTagihan
-                    )
+                            cmd.Parameters.AddWithValue(
+                                "@p1", nomorTransaksi
+                            )
 
-                    cmd.Parameters.AddWithValue(
-                        "@p4", uangDiterima
-                    )
+                            cmd.Parameters.AddWithValue(
+                                "@p2", DateTime.Now
+                            )
 
-                    cmd.Parameters.AddWithValue(
-                        "@p5", kembalian
-                    )
+                            cmd.Parameters.AddWithValue(
+                                "@p3", totalTagihan
+                            )
 
-                    cmd.Parameters.AddWithValue(
-                        "@p6", cmbMetode.Text
-                    )
+                            cmd.Parameters.AddWithValue(
+                                "@p4", uangDiterima
+                            )
 
-                    cmd.ExecuteNonQuery()
+                            cmd.Parameters.AddWithValue(
+                                "@p5", kembalian
+                            )
+
+                            cmd.Parameters.AddWithValue(
+                                "@p6", cmbMetode.Text
+                            )
+
+                            cmd.ExecuteNonQuery()
+
+                        End Using
+
+                        trans.Commit()
+
+                    Catch
+
+                        trans.Rollback()
+                        Throw
+
+                    End Try
 
                 End Using
 
@@ -377,7 +606,10 @@ Public Class Form4
         Catch ex As Exception
 
             MessageBox.Show(
-                "Gagal menyimpan pembayaran: " & ex.Message
+                "Gagal menyimpan pembayaran: " & ex.Message,
+                "Kesalahan",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error
             )
 
         End Try
@@ -393,10 +625,13 @@ Public Class Form4
     ) Handles btnCetakStruk.Click
 
         If Not sudahDibayar Then
+
             MessageBox.Show(
-                "Simpan pembayaran terlebih dahulu."
+                "Pembayaran belum disimpan."
             )
+
             Return
+
         End If
 
         Using dialog As New PrintDialog()
@@ -404,115 +639,217 @@ Public Class Form4
             dialog.Document = dokumenCetak
 
             If dialog.ShowDialog() = DialogResult.OK Then
-                dokumenCetak.Print()
+
+                Try
+
+                    dokumenCetak.Print()
+
+                Catch ex As Exception
+
+                    MessageBox.Show(
+                        "Gagal mencetak struk: " & ex.Message
+                    )
+
+                End Try
+
             End If
 
         End Using
 
     End Sub
 
+    '========================================
+    ' ISI CETAK STRUK
+    '========================================
     Private Sub dokumenCetak_PrintPage(
         sender As Object,
         e As PrintPageEventArgs
     ) Handles dokumenCetak.PrintPage
 
-        Dim fontJudul As New Font("Arial", 14, FontStyle.Bold)
-        Dim fontIsi As New Font("Arial", 9)
-        Dim y As Integer = 30
-
-        e.Graphics.DrawString(
-            "PENYETAN HAJI TOYYIB",
-            fontJudul,
-            Brushes.Black,
-            30,
-            y
+        Using fontJudul As New Font(
+            "Arial",
+            14,
+            FontStyle.Bold
         )
 
-        y += 35
-
-        e.Graphics.DrawString(
-            "HT POS - BUKTI PEMBAYARAN",
-            fontIsi,
-            Brushes.Black,
-            30,
-            y
-        )
-
-        y += 30
-
-        e.Graphics.DrawString(
-            "No. Transaksi: " & nomorTransaksi,
-            fontIsi,
-            Brushes.Black,
-            30,
-            y
-        )
-
-        y += 20
-
-        e.Graphics.DrawString(
-            "--------------------------------------------",
-            fontIsi,
-            Brushes.Black,
-            30,
-            y
-        )
-
-        y += 25
-
-        For Each baris As DataGridViewRow In dgvRincianBayar.Rows
-
-            e.Graphics.DrawString(
-                Convert.ToString(baris.Cells("menu").Value),
-                fontIsi,
-                Brushes.Black,
-                30,
-                y
+            Using fontIsi As New Font(
+                "Arial",
+                9,
+                FontStyle.Regular
             )
 
-            y += 20
+                Dim grafik As Graphics = e.Graphics
+                Dim y As Integer = 30
+                Dim x As Integer = 30
+                Dim lebar As Integer = 350
 
-            e.Graphics.DrawString(
-                Convert.ToString(baris.Cells("qty").Value) &
-                " x " &
-                Convert.ToString(baris.Cells("harga").Value) &
-                " = " &
-                Convert.ToString(baris.Cells("total").Value),
-                fontIsi,
-                Brushes.Black,
-                30,
-                y
-            )
+                grafik.DrawString(
+                    "PENYETAN HAJI TOYYIB",
+                    fontJudul,
+                    Brushes.Black,
+                    x,
+                    y
+                )
 
-            y += 25
+                y += 35
 
-        Next
+                grafik.DrawString(
+                    "BUKTI PEMBAYARAN",
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
 
-        e.Graphics.DrawString(
-            "TOTAL: " & FormatRupiah(totalTagihan),
-            fontJudul,
-            Brushes.Black,
-            30,
-            y
-        )
+                y += 25
 
-        y += 30
+                grafik.DrawString(
+                    "No. Transaksi : " & nomorTransaksi,
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
 
-        e.Graphics.DrawString(
-            "Terima kasih.",
-            fontIsi,
-            Brushes.Black,
-            30,
-            y
-        )
+                y += 20
 
-        fontJudul.Dispose()
-        fontIsi.Dispose()
+                grafik.DrawString(
+                    "Waktu         : " & DateTime.Now.ToString(
+                        "dd/MM/yyyy HH:mm"
+                    ),
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 25
+
+                grafik.DrawString(
+                    "------------------------------------------",
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 25
+
+                For Each baris As DataGridViewRow In
+                    dgvRincianBayar.Rows
+
+                    If baris.IsNewRow Then Continue For
+
+                    Dim nama As String =
+                        Convert.ToString(
+                            baris.Cells("menu").Value
+                        )
+
+                    Dim qty As String =
+                        Convert.ToString(
+                            baris.Cells("qty").Value
+                        )
+
+                    Dim harga As String =
+                        Convert.ToString(
+                            baris.Cells("harga").Value
+                        )
+
+                    Dim subtotal As String =
+                        Convert.ToString(
+                            baris.Cells("total").Value
+                        )
+
+                    grafik.DrawString(
+                        nama,
+                        fontIsi,
+                        Brushes.Black,
+                        x,
+                        y
+                    )
+
+                    y += 18
+
+                    grafik.DrawString(
+                        qty & " x " & harga & " = " & subtotal,
+                        fontIsi,
+                        Brushes.Black,
+                        x,
+                        y
+                    )
+
+                    y += 25
+
+                Next
+
+                grafik.DrawString(
+                    "------------------------------------------",
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 25
+
+                grafik.DrawString(
+                    "TOTAL       : " & FormatRupiah(totalTagihan),
+                    fontJudul,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 30
+
+                grafik.DrawString(
+                    "UANG DITERIMA: " & FormatRupiah(uangDiterima),
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 20
+
+                grafik.DrawString(
+                    "KEMBALIAN    : " & FormatRupiah(kembalian),
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 25
+
+                grafik.DrawString(
+                    "METODE       : " & cmbMetode.Text,
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+                y += 35
+
+                grafik.DrawString(
+                    "Terima kasih atas kunjungan Anda.",
+                    fontIsi,
+                    Brushes.Black,
+                    x,
+                    y
+                )
+
+            End Using
+
+        End Using
+
+        e.HasMorePages = False
 
     End Sub
 
     '========================================
-    ' NAVIGASI
+    ' NAVIGASI DASHBOARD
     '========================================
     Private Sub btnNavDashboard_Click(
         sender As Object,
@@ -523,6 +860,9 @@ Public Class Form4
 
     End Sub
 
+    '========================================
+    ' NAVIGASI PEMESANAN
+    '========================================
     Private Sub btnNavPesanan_Click(
         sender As Object,
         e As EventArgs
@@ -532,6 +872,9 @@ Public Class Form4
 
     End Sub
 
+    '========================================
+    ' NAVIGASI ANTREAN DAPUR
+    '========================================
     Private Sub btnNavAntrean_Click(
         sender As Object,
         e As EventArgs
@@ -541,6 +884,9 @@ Public Class Form4
 
     End Sub
 
+    '========================================
+    ' NAVIGASI RIWAYAT KOREKSI
+    '========================================
     Private Sub btnNavKoreksi_Click(
         sender As Object,
         e As EventArgs
@@ -550,6 +896,9 @@ Public Class Form4
 
     End Sub
 
+    '========================================
+    ' LOGOUT
+    '========================================
     Private Sub btnLogout_Click(
         sender As Object,
         e As EventArgs
