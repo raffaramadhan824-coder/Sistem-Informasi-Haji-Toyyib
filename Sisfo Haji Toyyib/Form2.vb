@@ -99,64 +99,64 @@ Public Class Form2
 
                 End Using
 
-                ' Transaksi terbaru
+
+                ' TRANSAKSI TERBARU
                 dgvTransaksi.Rows.Clear()
 
                 Dim sql5 As String =
-                    "SELECT TOP 10 No_Transaksi, Nama_Pelanggan, " &
-                    "Status_Pesanan, Waktu_Pesanan " &
-                    "FROM PESANAN ORDER BY Waktu_Pesanan DESC"
+    "SELECT TOP 10 No_Transaksi, Nama_Pelanggan, " &
+    "Status_Pesanan, Waktu_Pesanan " &
+    "FROM PESANAN ORDER BY Waktu_Pesanan DESC"
 
-                Using cmd As New OleDbCommand(sql5, conn)
+                Dim tabelTransaksi As New DataTable()
 
-                    Using reader = cmd.ExecuteReader()
+                Using adapter As New OleDbDataAdapter(sql5, conn)
+                    adapter.Fill(tabelTransaksi)
+                End Using
 
-                        Dim nomor As Integer = 1
+                Dim nomor As Integer = 1
 
-                        While reader.Read()
+                For Each data As DataRow In tabelTransaksi.Rows
 
-                            Dim transaksi As String =
-                                Convert.ToString(reader("No_Transaksi"))
+                    Dim transaksi As String =
+        Convert.ToString(data("No_Transaksi"))
 
-                            Dim pelanggan As String =
-                                Convert.ToString(reader("Nama_Pelanggan"))
+                    Dim pelanggan As String =
+        Convert.ToString(data("Nama_Pelanggan"))
 
-                            Dim status As String =
-                                Convert.ToString(reader("Status_Pesanan"))
+                    Dim status As String =
+        Convert.ToString(data("Status_Pesanan"))
 
-                            Dim total As Decimal = 0
+                    Dim total As Decimal = 0
 
-                            Using cmdTotal As New OleDbCommand(
-                                "SELECT SUM(Jumlah * Harga_Satuan) " &
-                                "FROM DETAIL_PESANAN WHERE No_Transaksi = ?",
-                                conn
-                            )
+                    Using cmdTotal As New OleDbCommand(
+        "SELECT SUM(Jumlah * Harga_Satuan) " &
+        "FROM DETAIL_PESANAN WHERE No_Transaksi = ?",
+        conn
+    )
 
-                                cmdTotal.Parameters.AddWithValue("@p1", transaksi)
+                        cmdTotal.Parameters.AddWithValue("@p1", transaksi)
 
-                                Dim hasil = cmdTotal.ExecuteScalar()
+                        Dim hasil = cmdTotal.ExecuteScalar()
 
-                                If hasil IsNot DBNull.Value AndAlso hasil IsNot Nothing Then
-                                    total = Convert.ToDecimal(hasil)
-                                End If
-
-                            End Using
-
-                            dgvTransaksi.Rows.Add(
-                                nomor,
-                                transaksi,
-                                pelanggan,
-                                FormatRupiah(total),
-                                status
-                            )
-
-                            nomor += 1
-
-                        End While
+                        If hasil IsNot DBNull.Value AndAlso hasil IsNot Nothing Then
+                            total = Convert.ToDecimal(hasil)
+                        End If
 
                     End Using
 
-                End Using
+                    dgvTransaksi.Rows.Add(
+        nomor,
+        transaksi,
+        pelanggan,
+        FormatRupiah(total),
+        status
+    )
+
+                    nomor += 1
+
+                Next
+
 
                 ' Menu terlaris
                 Dim daftarLabel As Label() = {
