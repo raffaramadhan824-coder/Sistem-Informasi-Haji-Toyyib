@@ -178,4 +178,25 @@ Module Module1
 
     End Sub
 
+    '========================================
+    ' MENGATUR LAPISAN KOMPONEN FORM
+    '========================================
+    Public Sub AturLayerKonten(konten As Panel)
+
+        'Letakkan semua panel latar di belakang
+        For Each kontrol As Control In konten.Controls
+            If TypeOf kontrol Is Panel Then
+                kontrol.SendToBack()
+            End If
+        Next
+
+        'Letakkan komponen isi di depan panel latar
+        For Each kontrol As Control In konten.Controls
+            If Not TypeOf kontrol Is Panel Then
+                kontrol.BringToFront()
+            End If
+        Next
+
+    End Sub
+
 End Module
